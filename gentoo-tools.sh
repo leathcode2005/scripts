@@ -71,6 +71,7 @@ opt_makeconf() {
 
     INFO "Detected CPU_FLAGS_X86 : ${CPU_FLAGS}"
     INFO "Detected CPU cores     : ${JOBS}"
+    INFO "Auto-calculated MAKEOPTS: -j${JOBS} -l${LOAD}  (derived from nproc)"
 
     # ── Backup ────────────────────────────────────────────────────────────────
     cp -n "${MAKECONF}" "${MAKECONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null \
@@ -223,7 +224,7 @@ opt_rebuild() {
     require_root || { press_enter; return; }
 
     echo
-    WARN "This will run a full sync → rebuild → depclean → revdep cycle."
+    WARN "This will run a full sync → dependency check → rebuild → depclean → revdep cycle."
     printf "  ${YELLOW}${BOLD}Continue? [y/N]: ${RESET}"
     read -r confirm
     [[ "${confirm,,}" != "y" ]] && { INFO "Aborted."; press_enter; return; }
@@ -250,6 +251,20 @@ opt_rebuild() {
     )
 
     for i in "${!STEPS[@]}"; do
+        # ── Before the @world rebuild (third step, index 2), run a dependency pre-check ──
+        if [[ $i -eq 2 ]]; then
+            echo
+            INFO "Dependency pre-check: testing @world for conflicts before rebuilding..."
+            HR
+            if ! emerge --pretend --update --deep --newuse --with-bdeps=y --backtrack=30 @world; then
+                ERROR "Dependency issues detected — world update aborted."
+                WARN "Review the conflicts shown above, resolve them, then re-run this option."
+                press_enter
+                return
+            fi
+            SUCCESS "Dependency pre-check passed — no conflicts found. Proceeding with rebuild..."
+        fi
+
         echo
         INFO "Step $((i+1))/${#STEPS[@]}: ${STEPS[$i]}"
         HR
