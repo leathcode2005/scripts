@@ -71,6 +71,8 @@ opt_makeconf() {
 
     INFO "Detected CPU_FLAGS_X86 : ${CPU_FLAGS}"
     INFO "Detected CPU cores     : ${JOBS}"
+    INFO "Auto-setting MAKEOPTS  : -j${JOBS} -l${LOAD}  (based on $(nproc) cores)"
+    INFO "Auto-setting EMERGE_DEFAULT_OPTS : --jobs=${JOBS} --load-average=${LOAD}"
 
     # ── Backup ────────────────────────────────────────────────────────────────
     cp -n "${MAKECONF}" "${MAKECONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null \
@@ -228,9 +230,59 @@ opt_rebuild() {
     read -r confirm
     [[ "${confirm,,}" != "y" ]] && { INFO "Aborted."; press_enter; return; }
 
-    local STEPS=(
-        "Sync Portage tree"
-        "Sync all repos (overlays)"
+    # ── Phase 1: Sync ─────────────────────────────────────────────────────────
+    local SYNC_STEPS=("Sync Portage tree" "Sync all repos (overlays)")
+    local SYNC_CMDS=("emerge --sync" "emaint sync --auto")
+
+    for i in "${!SYNC_STEPS[@]}"; do
+        echo
+        INFO "Sync step $((i+1))/${#SYNC_STEPS[@]}: ${SYNC_STEPS[$i]}"
+        HR
+        if ! eval "${SYNC_CMDS[$i]}"; then
+            WARN "Sync step $((i+1)) exited non-zero — check output above."
+            printf "  ${YELLOW}Continue anyway? [y/N]: ${RESET}"
+            read -r cont
+            [[ "${cont,,}" != "y" ]] && { ERROR "Aborted at sync step $((i+1))."; press_enter; return; }
+        else
+            SUCCESS "${SYNC_STEPS[$i]} completed."
+        fi
+    done
+
+    # ── Phase 2: Dependency pre-check (pretend) ───────────────────────────────
+    echo
+    HEADER "Dependency Pre-Check"
+    INFO "Running emerge in pretend mode to detect dependency conflicts..."
+    HR
+
+    local pretend_output
+    pretend_output="$(emerge --pretend --update --deep --newuse --with-bdeps=y @world 2>&1)"
+    local pretend_rc=$?
+
+    if [[ ${pretend_rc} -ne 0 ]]; then
+        echo
+        ERROR "Dependency conflicts / errors detected!"
+        ERROR "Resolve the issues below before re-running this option."
+        HR
+        echo "${pretend_output}" | while IFS= read -r line; do
+            printf "  ${RED}%s${RESET}\n" "${line}"
+        done
+        HR
+        WARN "Fix the issues shown above, then re-run option 3."
+        press_enter
+        return
+    fi
+
+    SUCCESS "Pretend run passed — no dependency conflicts found."
+    echo
+    INFO "Packages scheduled for update:"
+    HR
+    echo "${pretend_output}" | grep '^\[' | while IFS= read -r line; do
+        printf "  ${CYAN}%s${RESET}\n" "${line}"
+    done
+    HR
+
+    # ── Phase 3: Build & cleanup ──────────────────────────────────────────────
+    local BUILD_STEPS=(
         "Rebuild @world (deep, new-use, with-bdeps)"
         "Rebuild preserved libs"
         "Run depclean (remove obsolete packages)"
@@ -238,9 +290,7 @@ opt_rebuild() {
         "Rebuild Perl modules if perl-cleaner present"
         "Update config files (dispatch-conf)"
     )
-    local CMDS=(
-        "emerge --sync"
-        "emaint sync --auto"
+    local BUILD_CMDS=(
         "emerge --update --deep --newuse --with-bdeps=y --backtrack=30 --keep-going --ask=n @world"
         "emerge @preserved-rebuild"
         "emerge --depclean --ask=n"
@@ -249,17 +299,17 @@ opt_rebuild() {
         "dispatch-conf"
     )
 
-    for i in "${!STEPS[@]}"; do
+    for i in "${!BUILD_STEPS[@]}"; do
         echo
-        INFO "Step $((i+1))/${#STEPS[@]}: ${STEPS[$i]}"
+        INFO "Build step $((i+1))/${#BUILD_STEPS[@]}: ${BUILD_STEPS[$i]}"
         HR
-        if ! eval "${CMDS[$i]}"; then
-            WARN "Step $((i+1)) exited non-zero — check output above before continuing."
+        if ! eval "${BUILD_CMDS[$i]}"; then
+            WARN "Build step $((i+1)) exited non-zero — check output above before continuing."
             printf "  ${YELLOW}Continue anyway? [y/N]: ${RESET}"
             read -r cont
-            [[ "${cont,,}" != "y" ]] && { ERROR "Aborted at step $((i+1))."; press_enter; return; }
+            [[ "${cont,,}" != "y" ]] && { ERROR "Aborted at build step $((i+1))."; press_enter; return; }
         else
-            SUCCESS "${STEPS[$i]} completed."
+            SUCCESS "${BUILD_STEPS[$i]} completed."
         fi
     done
 
@@ -458,6 +508,200 @@ opt_kernel() {
     press_enter
 }
 
+# ─── Option 6 — Manage /etc/portage/package.use ───────────────────────────────
+opt_packageuse() {
+    local PKGUSE_DIR="/etc/portage/package.use"
+
+    # ── Inner helper: list all entries with numbered index ─────────────────────
+    _pkguse_list_entries() {
+        local -a files entries
+        local idx=0
+
+        mapfile -t files < <(find "${PKGUSE_DIR}" -maxdepth 1 -type f 2>/dev/null | sort)
+
+        if [[ ${#files[@]} -eq 0 ]]; then
+            WARN "No package.use files found."
+            return 1
+        fi
+
+        for f in "${files[@]}"; do
+            while IFS= read -r line; do
+                [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]] && continue
+                (( idx++ ))
+                entries+=("${f}|${line}")
+                local fname
+                fname="$(basename "${f}")"
+                printf "  ${GREEN}${BOLD}%3d${RESET}  ${CYAN}%-20s${RESET}  %s\n" \
+                    "${idx}" "${fname}" "${line}"
+            done < "${f}"
+        done
+
+        if [[ ${idx} -eq 0 ]]; then
+            WARN "All package.use files are empty or contain only comments."
+            return 1
+        fi
+
+        # Stash the entries array for the caller via a global
+        _PKGUSE_ENTRIES=("${entries[@]}")
+        return 0
+    }
+
+    # ── Inner helper: add an entry ────────────────────────────────────────────
+    _pkguse_add() {
+        HEADER "Add package.use Entry"
+        require_root || return
+
+        printf "  ${YELLOW}${BOLD}Package atom${RESET} (e.g. media-video/ffmpeg): "
+        read -r pkg_atom
+        [[ -z "${pkg_atom}" ]] && { WARN "Empty input — cancelled."; return; }
+
+        printf "  ${YELLOW}${BOLD}USE flags${RESET} (e.g. -python x264 x265): "
+        read -r use_flags
+        [[ -z "${use_flags}" ]] && { WARN "Empty input — cancelled."; return; }
+
+        # Derive filename from the package name (strip category/)
+        local pkg_name
+        pkg_name="$(echo "${pkg_atom}" | sed 's|.*/||')"
+
+        # Ensure package.use directory exists
+        mkdir -p "${PKGUSE_DIR}"
+
+        local target="${PKGUSE_DIR}/${pkg_name}"
+        local entry="${pkg_atom} ${use_flags}"
+
+        # Avoid duplicates
+        if [[ -f "${target}" ]] && grep -qF "${entry}" "${target}" 2>/dev/null; then
+            WARN "Entry already exists in ${target}:"
+            grep -nF "${entry}" "${target}" | while IFS= read -r l; do
+                printf "    ${DIM}%s${RESET}\n" "${l}"
+            done
+            return
+        fi
+
+        echo "${entry}" >> "${target}"
+        SUCCESS "Added to ${target}:"
+        printf "    ${CYAN}%s${RESET}\n" "${entry}"
+    }
+
+    # ── Inner helper: edit an entry by number ─────────────────────────────────
+    _pkguse_edit() {
+        HEADER "Edit package.use Entry"
+        require_root || return
+
+        echo
+        INFO "Current entries:"
+        HR
+        _pkguse_list_entries || return
+        HR
+
+        printf "\n  ${YELLOW}${BOLD}Entry number to edit${RESET} (0 to cancel): "
+        read -r num
+        [[ -z "${num}" || "${num}" == "0" ]] && { INFO "Cancelled."; return; }
+
+        if ! [[ "${num}" =~ ^[0-9]+$ ]] || (( num < 1 || num > ${#_PKGUSE_ENTRIES[@]} )); then
+            ERROR "Invalid selection."
+            return
+        fi
+
+        local selected="${_PKGUSE_ENTRIES[$((num-1))]}"
+        local file="${selected%%|*}"
+        local old_line="${selected#*|}"
+
+        echo
+        LABEL "File:"         "$(basename "${file}")"
+        LABEL "Current entry:" "${old_line}"
+        echo
+        printf "  ${YELLOW}${BOLD}New USE flags${RESET} (package atom is kept): "
+        read -r new_flags
+        [[ -z "${new_flags}" ]] && { WARN "Empty input — cancelled."; return; }
+
+        # Reconstruct: keep original package atom, replace flags
+        local pkg_atom
+        pkg_atom="$(echo "${old_line}" | awk '{print $1}')"
+        local new_line="${pkg_atom} ${new_flags}"
+
+        # Use sed to replace the exact old line
+        sed -i "s|^${old_line}$|${new_line}|" "${file}"
+        SUCCESS "Updated in $(basename "${file}"):"
+        printf "    ${DIM}old:${RESET} %s\n" "${old_line}"
+        printf "    ${GREEN}new:${RESET} %s\n" "${new_line}"
+    }
+
+    # ── Inner helper: delete an entry by number ───────────────────────────────
+    _pkguse_delete() {
+        HEADER "Delete package.use Entry"
+        require_root || return
+
+        echo
+        INFO "Current entries:"
+        HR
+        _pkguse_list_entries || return
+        HR
+
+        printf "\n  ${YELLOW}${BOLD}Entry number to delete${RESET} (0 to cancel): "
+        read -r num
+        [[ -z "${num}" || "${num}" == "0" ]] && { INFO "Cancelled."; return; }
+
+        if ! [[ "${num}" =~ ^[0-9]+$ ]] || (( num < 1 || num > ${#_PKGUSE_ENTRIES[@]} )); then
+            ERROR "Invalid selection."
+            return
+        fi
+
+        local selected="${_PKGUSE_ENTRIES[$((num-1))]}"
+        local file="${selected%%|*}"
+        local old_line="${selected#*|}"
+
+        echo
+        LABEL "File:"  "$(basename "${file}")"
+        LABEL "Entry:" "${old_line}"
+        printf "  ${YELLOW}${BOLD}Confirm delete? [y/N]: ${RESET}"
+        read -r yn
+        [[ "${yn,,}" != "y" ]] && { INFO "Cancelled."; return; }
+
+        # Escape special chars for sed and delete the line
+        local escaped
+        escaped="$(printf '%s\n' "${old_line}" | sed 's/[&/\]/\\&/g')"
+        sed -i "/^${escaped}$/d" "${file}"
+
+        # Remove the file if it's now empty (ignoring comments/blanks)
+        if ! grep -qE '^[^#[:space:]]' "${file}" 2>/dev/null; then
+            rm -f "${file}"
+            SUCCESS "Entry deleted and empty file $(basename "${file}") removed."
+        else
+            SUCCESS "Entry deleted from $(basename "${file}")."
+        fi
+    }
+
+    # ── Sub-menu loop ─────────────────────────────────────────────────────────
+    while true; do
+        HEADER "Manage /etc/portage/package.use"
+        echo
+        printf "  ${GREEN}${BOLD}[a]${RESET}  ${WHITE}Add a package.use entry${RESET}\n"
+        printf "  ${GREEN}${BOLD}[l]${RESET}  ${WHITE}List all entries${RESET}\n"
+        printf "  ${GREEN}${BOLD}[e]${RESET}  ${WHITE}Edit an entry${RESET}\n"
+        printf "  ${GREEN}${BOLD}[d]${RESET}  ${WHITE}Delete an entry${RESET}\n"
+        printf "  ${RED}${BOLD}[b]${RESET}  ${WHITE}Back to main menu${RESET}\n"
+        echo
+        HR
+        printf "  ${YELLOW}${BOLD}Select: ${RESET}"
+        read -r sub
+        case "${sub}" in
+            a|A) _pkguse_add    ;;
+            l|L)
+                HEADER "All package.use Entries"
+                HR
+                _pkguse_list_entries || true
+                HR
+                ;;
+            e|E) _pkguse_edit   ;;
+            d|D) _pkguse_delete ;;
+            b|B|0|q|Q) break    ;;
+            *) WARN "Unknown option '${sub}'." ;;
+        esac
+        press_enter
+    done
+}
+
 # ─── Main menu ────────────────────────────────────────────────────────────────
 print_menu() {
     clear
@@ -482,6 +726,9 @@ print_menu() {
     printf "  ${GREEN}${BOLD}[5]${RESET}  ${WHITE}Kernel info${RESET}"
     printf "               ${DIM}— running kernel, sources, config, modules${RESET}\n"
 
+    printf "  ${GREEN}${BOLD}[6]${RESET}  ${WHITE}Manage package.use${RESET}"
+    printf "      ${DIM}— add, list, edit & delete per-package USE flags${RESET}\n"
+
     echo
     printf "  ${RED}${BOLD}[0]${RESET}  ${WHITE}Exit${RESET}\n"
     echo
@@ -499,6 +746,7 @@ main() {
             3) opt_rebuild   ;;
             4) opt_bootloader;;
             5) opt_kernel    ;;
+            6) opt_packageuse;;
             0|q|Q|exit)
                 echo
                 printf "  ${GREEN}Goodbye.${RESET}\n\n"
@@ -506,7 +754,7 @@ main() {
                 ;;
             *)
                 echo
-                WARN "Unknown option '${choice}' — please choose 0–5."
+                WARN "Unknown option '${choice}' — please choose 0–6."
                 sleep 1
                 ;;
         esac
