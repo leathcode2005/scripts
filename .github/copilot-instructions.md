@@ -1,26 +1,29 @@
 # Copilot Instructions for `scripts`
 
 ## Current repository shape
-- This repository is currently a minimal scaffold.
-- Only `README.md` and `.git/` exist on `main` (initial commit only).
-- There are no application source files, package manifests, CI workflows, or test configuration yet.
+- Two fully-featured interactive Bash admin-menu scripts exist:
+  - `gentoo-tools.sh` — Gentoo Linux administration (make.conf, fstab, world rebuild, bootloader, kernel info)
+  - `crux-tools.sh` — CRUX Linux administration (pkgmk.conf, fstab, system upgrade, bootloader, kernel info)
+- `README.md` documents both scripts with usage, menu-option tables, and dependency lists.
+- No CI workflows, package manifests, or automated test infrastructure exist yet.
 
 ## How to work effectively here
-- Treat this repo as **scripts-first and convention-light** until explicit structure is added.
-- Prefer small, focused additions over large frameworks unless the prompt asks for full scaffolding.
-- When adding new code, also add/expand `README.md` with:
-  - what the script does,
+- Treat this repo as **scripts-first and convention-light**.
+- Both scripts follow the same structure: color/helper definitions → `opt_*` functions → `print_menu` → `main` loop.
+- When adding a new script or menu option, also update `README.md` with:
+  - what the script/option does,
   - how to run it,
   - required dependencies.
 
 ## Architecture guidance (present state)
-- No multi-component architecture exists yet.
-- No service boundaries, data contracts, or inter-process communication patterns are established.
-- If a task introduces architecture (for example multiple scripts/modules), document the chosen layout in `README.md` at the same time.
+- Flat repo layout: all scripts live at the top level.
+- No service boundaries or inter-process communication patterns.
+- If a new grouping is introduced (e.g. a `scripts/` subdirectory), document it in `README.md`.
 
 ## Build, test, and run workflows
-- There are currently no discoverable build/test commands in-repo.
-- Before proposing commands, inspect newly added manifests (for example `package.json`, `pyproject.toml`, `Makefile`, or shell scripts) and use those as the source of truth.
+- No automated build or test commands exist yet.
+- Manual testing: run `sudo bash gentoo-tools.sh` or `sudo bash crux-tools.sh` on the target system.
+- `bash -n <script>` can be used for a quick syntax check without executing the script.
 - If adding a runnable script, include an explicit invocation example in `README.md`.
 
 ## Project-specific conventions to preserve
