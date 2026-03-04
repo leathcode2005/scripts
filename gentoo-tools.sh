@@ -64,13 +64,26 @@ opt_makeconf() {
     # ── Gather values ──────────────────────────────────────────────────────────
     local CPU_FLAGS
     CPU_FLAGS="$(cpuid2cpuflags | sed 's/^CPU_FLAGS_X86: //')"
-    local JOBS
-    JOBS="$(nproc)"
-    local LOAD
-    LOAD="$(nproc)"          # -l = load limit = same as job count keeps system responsive
 
-    INFO "Detected CPU_FLAGS_X86 : ${CPU_FLAGS}"
-    INFO "Detected CPU cores     : ${JOBS}"
+    # Auto-calculate parallel jobs: use all CPU threads but cap at ~1 job per 2 GB RAM
+    # to avoid out-of-memory kills during heavy C++ builds.
+    # Work in MB to avoid losing sub-GB precision from integer division.
+    local CPUS RAM_MB RAM_JOBS JOBS LOAD
+    CPUS="$(nproc)"
+    RAM_MB="$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo)"
+    RAM_JOBS=$(( RAM_MB / 2048 ))   # 1 job per ~2 GB
+    [[ ${RAM_JOBS} -lt 1 ]] && RAM_JOBS=1
+    if [[ ${RAM_JOBS} -lt ${CPUS} ]]; then
+        JOBS="${RAM_JOBS}"
+        INFO "RAM limit applied: $(( RAM_MB / 1024 )) GB RAM → capping jobs at ${JOBS} (${CPUS} threads available)"
+    else
+        JOBS="${CPUS}"
+    fi
+    LOAD="${CPUS}"           # -l = load ceiling = all threads; prevents new jobs when busy
+
+    INFO "Detected CPU_FLAGS_X86: ${CPU_FLAGS}"
+    INFO "Detected CPU threads: ${CPUS}  |  RAM: $(( RAM_MB / 1024 )) GB"
+    INFO "Calculated MAKEOPTS: -j${JOBS} -l${LOAD}"
 
     # ── Backup ────────────────────────────────────────────────────────────────
     cp -n "${MAKECONF}" "${MAKECONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null \
@@ -228,6 +241,29 @@ opt_rebuild() {
     read -r confirm
     [[ "${confirm,,}" != "y" ]] && { INFO "Aborted."; press_enter; return; }
 
+    # ── Dependency pre-check ──────────────────────────────────────────────────
+    # Shared flags used for both the pretend check and the actual rebuild step
+    local WORLD_OPTS="--update --deep --newuse --with-bdeps=y --backtrack=30"
+    echo
+    INFO "Running dependency pre-check (emerge --pretend) before making any changes ..."
+    HR
+    local pretend_out
+    pretend_out="$(emerge --pretend ${WORLD_OPTS} @world 2>&1)"
+    local pretend_rc=$?
+    # Show the full pretend output so the user can see what would change
+    while IFS= read -r line; do
+        printf "  %s\n" "${line}"
+    done <<< "${pretend_out}"
+    HR
+    if [[ ${pretend_rc} -ne 0 ]]; then
+        ERROR "Dependency issues detected! emerge --pretend exited with code ${pretend_rc}."
+        WARN  "Review the output above, resolve any conflicts (e.g. edit package.use / package.mask),"
+        WARN  "then re-run this option."
+        press_enter; return
+    fi
+    SUCCESS "Dependency pre-check passed — no conflicts found."
+    echo
+
     local STEPS=(
         "Sync Portage tree"
         "Sync all repos (overlays)"
@@ -241,7 +277,7 @@ opt_rebuild() {
     local CMDS=(
         "emerge --sync"
         "emaint sync --auto"
-        "emerge --update --deep --newuse --with-bdeps=y --backtrack=30 --keep-going --ask=n @world"
+        "emerge ${WORLD_OPTS} --keep-going --ask=n @world"
         "emerge @preserved-rebuild"
         "emerge --depclean --ask=n"
         "revdep-rebuild -- --ask=n"
