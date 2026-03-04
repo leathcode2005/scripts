@@ -71,6 +71,7 @@ opt_makeconf() {
 
     INFO "Detected CPU_FLAGS_X86 : ${CPU_FLAGS}"
     INFO "Detected CPU cores     : ${JOBS}"
+    INFO "Auto-computed MAKEOPTS : \"-j${JOBS} -l${LOAD}\""
 
     # ── Backup ────────────────────────────────────────────────────────────────
     cp -n "${MAKECONF}" "${MAKECONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null \
@@ -227,6 +228,21 @@ opt_rebuild() {
     printf "  ${YELLOW}${BOLD}Continue? [y/N]: ${RESET}"
     read -r confirm
     [[ "${confirm,,}" != "y" ]] && { INFO "Aborted."; press_enter; return; }
+
+    # ── Pre-flight dependency check ───────────────────────────────────────────
+    echo
+    INFO "Pre-flight: checking for dependency issues before rebuilding @world ..."
+    HR
+    local pretend_rc=0
+    emerge --pretend --update --deep --newuse --with-bdeps=y --backtrack=30 @world \
+        || pretend_rc=$?
+    if [[ ${pretend_rc} -ne 0 ]]; then
+        echo
+        ERROR "Dependency issues detected (emerge exited with code ${pretend_rc}) — aborting rebuild."
+        WARN  "Review the output above, resolve all blockers/conflicts, then re-run option 3."
+        press_enter; return
+    fi
+    SUCCESS "Pre-flight check passed — no dependency issues found."
 
     local STEPS=(
         "Sync Portage tree"
