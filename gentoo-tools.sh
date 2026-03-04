@@ -63,7 +63,7 @@ opt_makeconf() {
 
     # ── Gather values ──────────────────────────────────────────────────────────
     local CPU_FLAGS
-    CPU_FLAGS="",(cpuid2cpuflags | sed 's/^CPU_FLAGS_X86: //')"
+    CPU_FLAGS="$(cpuid2cpuflags | sed 's/^CPU_FLAGS_X86: //')"
     local JOBS
     JOBS="$(nproc)"
     local LOAD
@@ -92,7 +92,7 @@ opt_makeconf() {
     update_conf 'FCFLAGS'          '"${COMMON_FLAGS}"'                   "${MAKECONF}"
     update_conf 'FFLAGS'           '"${COMMON_FLAGS}"'                   "${MAKECONF}"
     update_conf 'MAKEOPTS'         '"-j'"${JOBS}"' -l'"${LOAD}"'"       "${MAKECONF}"
-    update_conf 'EMERGE_DEFAULT_OPTS' '"--jobs='"${JOBS}"' --load-average='"${LOAD}"' "${MAKECONF}"
+    update_conf 'EMERGE_DEFAULT_OPTS' '"--jobs='"${JOBS}"' --load-average='"${LOAD}"'"' "${MAKECONF}"
     update_conf 'CPU_FLAGS_X86'    '"'"${CPU_FLAGS}"'"                  "${MAKECONF}"
     update_conf 'PORTAGE_NICENESS' '"15"'                                "${MAKECONF}"
     update_conf 'FEATURES'         '"parallel-fetch parallel-install"'   "${MAKECONF}"
@@ -109,8 +109,7 @@ opt_makeconf() {
     USE_FLAGS+=' jpeg png gif webp svg'
     USE_FLAGS+=' truetype fontconfig nls unicode'
     USE_FLAGS+=' zip zlib bzip2 lzma xz'
-    USE_FLAGS+=' spell hunspell semantic-desktop activities kwallet ssl curl libnotify'";
-
+    USE_FLAGS+=' spell hunspell semantic-desktop activities kwallet ssl curl libnotify"'
     update_conf 'USE'          "${USE_FLAGS}"                              "${MAKECONF}"
 
     # ── VIDEO_CARDS — modern AMD GPU (amdgpu/radeonsi/radv) ───────────────────
