@@ -41,9 +41,9 @@ press_enter() {
     read -r
 }
 
-# ─── Option 1 — make.conf: CPU flags + optimal defaults ───────────────────────
+# ─── Option 1 — make.conf: CPU flags + optimal defaults + USE + VIDEO_CARDS ───
 opt_makeconf() {
-    HEADER "make.conf — CPU Flags & Optimal Defaults"
+    HEADER "make.conf — CPU Flags, Optimal Defaults, USE & VIDEO_CARDS"
     require_root || { press_enter; return; }
 
     local MAKECONF="/etc/portage/make.conf"
@@ -63,7 +63,7 @@ opt_makeconf() {
 
     # ── Gather values ──────────────────────────────────────────────────────────
     local CPU_FLAGS
-    CPU_FLAGS="$(cpuid2cpuflags | sed 's/^CPU_FLAGS_X86: //')"
+    CPU_FLAGS="",(cpuid2cpuflags | sed 's/^CPU_FLAGS_X86: //')"
     local JOBS
     JOBS="$(nproc)"
     local LOAD
@@ -91,20 +91,40 @@ opt_makeconf() {
     update_conf 'CXXFLAGS'         '"${COMMON_FLAGS}"'                   "${MAKECONF}"
     update_conf 'FCFLAGS'          '"${COMMON_FLAGS}"'                   "${MAKECONF}"
     update_conf 'FFLAGS'           '"${COMMON_FLAGS}"'                   "${MAKECONF}"
-    update_conf 'MAKEOPTS'         '"-j'"${JOBS}"' -l'"${LOAD}"'"'       "${MAKECONF}"
-    update_conf 'EMERGE_DEFAULT_OPTS' '"--jobs='"${JOBS}"' --load-average='"${LOAD}"'"' "${MAKECONF}"
-    update_conf 'CPU_FLAGS_X86'    '"'"${CPU_FLAGS}"'"'                  "${MAKECONF}"
+    update_conf 'MAKEOPTS'         '"-j'"${JOBS}"' -l'"${LOAD}"'"       "${MAKECONF}"
+    update_conf 'EMERGE_DEFAULT_OPTS' '"--jobs='"${JOBS}"' --load-average='"${LOAD}"' "${MAKECONF}"
+    update_conf 'CPU_FLAGS_X86'    '"'"${CPU_FLAGS}"'"                  "${MAKECONF}"
     update_conf 'PORTAGE_NICENESS' '"15"'                                "${MAKECONF}"
     update_conf 'FEATURES'         '"parallel-fetch parallel-install"'   "${MAKECONF}"
+
+    # ── Global USE flags — KDE Plasma + AMD GPU stack ─────────────────────────
+    local USE_FLAGS
+    USE_FLAGS='"X wayland'
+    USE_FLAGS+=' kde plasma qt5 qt6 dbus'
+    USE_FLAGS+=' opengl vulkan drm kms vaapi vdpau llvm'
+    USE_FLAGS+=' alsa pipewire pulseaudio sound-server jack'
+    USE_FLAGS+=' networkmanager wifi bluetooth'
+    USE_FLAGS+=' elogind policykit udev acl udisks cups'
+    USE_FLAGS+=' gstreamer ffmpeg mp3 ogg vorbis flac aac x264 x265'
+    USE_FLAGS+=' jpeg png gif webp svg'
+    USE_FLAGS+=' truetype fontconfig nls unicode'
+    USE_FLAGS+=' zip zlib bzip2 lzma xz'
+    USE_FLAGS+=' spell hunspell semantic-desktop activities kwallet ssl curl libnotify'";
+
+    update_conf 'USE'          "${USE_FLAGS}"                              "${MAKECONF}"
+
+    # ── VIDEO_CARDS — modern AMD GPU (amdgpu/radeonsi/radv) ───────────────────
+    update_conf 'VIDEO_CARDS' '"amdgpu radeonsi radv"'                    "${MAKECONF}"
 
     echo
     SUCCESS "make.conf updated.  Relevant lines:"
     HR
-    grep -E 'COMMON_FLAGS|CFLAGS|CXXFLAGS|MAKEOPTS|EMERGE_DEFAULT_OPTS|CPU_FLAGS_X86|PORTAGE_NICENESS|FEATURES' \
+    grep -E 'COMMON_FLAGS|CFLAGS|CXXFLAGS|MAKEOPTS|EMERGE_DEFAULT_OPTS|CPU_FLAGS_X86|PORTAGE_NICENESS|FEATURES|^USE=|VIDEO_CARDS' \
         "${MAKECONF}" | while IFS= read -r line; do
         printf "  ${GREEN}%s${RESET}\n" "${line}"
     done
     HR
+    WARN "Run: emerge --update --deep --newuse @world  to apply new USE/VIDEO_CARDS flags."
     press_enter
 }
 
@@ -126,29 +146,29 @@ opt_fstab() {
                     echo "noatime,errors=remount-ro"
                 else
                     echo "defaults,noatime"
-                fi ;;
+                fi ;;  
             btrfs)
-                echo "defaults,noatime,compress=zstd:1,space_cache=v2" ;;
+                echo "defaults,noatime,compress=zstd:1,space_cache=v2" ;; 
             xfs)
-                echo "defaults,noatime,largeio" ;;
+                echo "defaults,noatime,largeio" ;; 
             vfat|fat32|msdos)
-                echo "defaults,noatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed" ;;
+                echo "defaults,noatime,fmask=0022,dmask=0022,codepage=437,iocharset=utf8,shortname=mixed" ;; 
             swap)
-                echo "sw" ;;
+                echo "sw" ;; 
             tmpfs)
-                echo "defaults,noatime,mode=0755" ;;
+                echo "defaults,noatime,mode=0755" ;; 
             *)
-                echo "defaults,noatime" ;;
+                echo "defaults,noatime" ;; 
         esac
     }
 
     dump_pass() {
         local fs="$1" mp="$2"
         case "${fs}" in
-            swap|tmpfs|vfat|fat32) echo "0 0" ;;
+            swap|tmpfs|vfat|fat32) echo "0 0" ;; 
             *)
-                if [[ "${mp}" == "/" ]]; then echo "0 1"
-                else echo "0 2"; fi ;;
+                if [[ "${mp}" == "/" ]]; then echo "0 1" 
+                else echo "0 2"; fi ;; 
         esac
     }
 
@@ -182,7 +202,7 @@ opt_fstab() {
         # tmpfs entries worth keeping
         echo
         echo "# tmpfs"
-        printf "%-42s %-12s %-8s %-50s %s\n" \
+        printf "%42s %-12s %-8s %-50s %s\n" \
             "tmpfs" "/tmp" "tmpfs" "defaults,noatime,nosuid,nodev,size=2G,mode=1777" "0 0"
 
     } > "${FSTAB}"
@@ -449,7 +469,7 @@ print_menu() {
     HR
     echo
     printf "  ${GREEN}${BOLD}[1]${RESET}  ${WHITE}Configure make.conf${RESET}"
-    printf "  ${DIM}— CPU flags (cpuid2cpuflags) + optimal MAKEOPTS${RESET}\n"
+    printf "  ${DIM}— CPU flags, MAKEOPTS, USE flags & VIDEO_CARDS${RESET}\n"
 
     printf "  ${GREEN}${BOLD}[2]${RESET}  ${WHITE}Generate /etc/fstab${RESET}"
     printf "  ${DIM}— UUIDs, optimal mount options per filesystem${RESET}\n"
@@ -475,7 +495,7 @@ main() {
         print_menu
         read -r choice
         case "${choice}" in
-            1) opt_makeconf  ;;
+            1) opt_makeconf  ;; 
             2) opt_fstab     ;;
             3) opt_rebuild   ;;
             4) opt_bootloader;;
