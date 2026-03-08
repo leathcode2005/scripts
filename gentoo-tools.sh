@@ -69,10 +69,25 @@ opt_makeconf() {
     local LOAD
     LOAD="$(nproc)"          # -l = load limit = same as job count keeps system responsive
 
+    # ── Detect UEFI vs BIOS for GRUB_PLATFORMS ────────────────────────────────
+    local GRUB_PLATFORMS_VAL BOOT_MODE
+    if [[ -d /sys/firmware/efi ]]; then
+        GRUB_PLATFORMS_VAL="efi-64"
+        BOOT_MODE="UEFI detected"
+    else
+        GRUB_PLATFORMS_VAL="pc"
+        BOOT_MODE="BIOS detected"
+    fi
+
+    local LOAD_FLOAT
+    LOAD_FLOAT="$(printf '%.1f' "${LOAD}")"
+
     INFO "Detected CPU_FLAGS_X86 : ${CPU_FLAGS}"
     INFO "Detected CPU cores     : ${JOBS}"
-    INFO "Auto-setting MAKEOPTS  : -j${JOBS} -l${LOAD}  (based on $(nproc) cores)"
-    INFO "Auto-setting EMERGE_DEFAULT_OPTS : --jobs=${JOBS} --load-average=${LOAD}"
+    INFO "Auto-setting MAKEOPTS  : -j${JOBS} -l${LOAD_FLOAT}  (based on $(nproc) cores)"
+    INFO "Auto-setting EMERGE_DEFAULT_OPTS : --jobs=${JOBS} --load-average=${LOAD} --autounmask-write --verbose --keep-going"
+    INFO "Setting ACCEPT_LICENSE : *"
+    INFO "Setting GRUB_PLATFORMS : ${GRUB_PLATFORMS_VAL}  (${BOOT_MODE})"
 
     # ── Backup ────────────────────────────────────────────────────────────────
     cp -n "${MAKECONF}" "${MAKECONF}.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null \
@@ -93,11 +108,15 @@ opt_makeconf() {
     update_conf 'CXXFLAGS'         '"${COMMON_FLAGS}"'                   "${MAKECONF}"
     update_conf 'FCFLAGS'          '"${COMMON_FLAGS}"'                   "${MAKECONF}"
     update_conf 'FFLAGS'           '"${COMMON_FLAGS}"'                   "${MAKECONF}"
-    update_conf 'MAKEOPTS'         '"-j'"${JOBS}"' -l'"${LOAD}"'"       "${MAKECONF}"
-    update_conf 'EMERGE_DEFAULT_OPTS' '"--jobs='"${JOBS}"' --load-average='"${LOAD}"'"' "${MAKECONF}"
+    update_conf 'MAKEOPTS'         '"-j'"${JOBS}"' -l'"${LOAD_FLOAT}"'"'  "${MAKECONF}"
+    update_conf 'EMERGE_DEFAULT_OPTS' '"--jobs='"${JOBS}"' --load-average='"${LOAD}"' --autounmask-write --verbose --keep-going"' "${MAKECONF}"
     update_conf 'CPU_FLAGS_X86'    '"'"${CPU_FLAGS}"'"                  "${MAKECONF}"
     update_conf 'PORTAGE_NICENESS' '"15"'                                "${MAKECONF}"
-    update_conf 'FEATURES'         '"parallel-fetch parallel-install"'   "${MAKECONF}"
+    update_conf 'FEATURES'         '"parallel-fetch parallel-install candy"' "${MAKECONF}"
+    update_conf 'ACCEPT_LICENSE'   '"*"'                                 "${MAKECONF}"
+    update_conf 'GRUB_PLATFORMS'   '"'"${GRUB_PLATFORMS_VAL}"'"          "${MAKECONF}"
+    update_conf 'INPUT_DEVICES'    '"libinput"'                          "${MAKECONF}"
+    update_conf 'L10N'             '"en"'                                 "${MAKECONF}"
 
     # ── Global USE flags — KDE Plasma + AMD GPU stack ─────────────────────────
     local USE_FLAGS
@@ -120,12 +139,13 @@ opt_makeconf() {
     echo
     SUCCESS "make.conf updated.  Relevant lines:"
     HR
-    grep -E 'COMMON_FLAGS|CFLAGS|CXXFLAGS|MAKEOPTS|EMERGE_DEFAULT_OPTS|CPU_FLAGS_X86|PORTAGE_NICENESS|FEATURES|^USE=|VIDEO_CARDS' \
+    grep -E 'COMMON_FLAGS|CFLAGS|CXXFLAGS|MAKEOPTS|EMERGE_DEFAULT_OPTS|CPU_FLAGS_X86|PORTAGE_NICENESS|FEATURES|^USE=|VIDEO_CARDS|ACCEPT_LICENSE|GRUB_PLATFORMS|INPUT_DEVICES|L10N' \
         "${MAKECONF}" | while IFS= read -r line; do
         printf "  ${GREEN}%s${RESET}\n" "${line}"
     done
     HR
     WARN "Run: emerge --update --deep --newuse @world  to apply new USE/VIDEO_CARDS flags."
+    WARN "If new unmask/license files were written, run: dispatch-conf  (or etc-update) to review them."
     press_enter
 }
 
