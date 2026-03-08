@@ -20,7 +20,7 @@ sudo bash gentoo-tools.sh
 
 | # | Name | What it does |
 |---|------|--------------|
-| 1 | **Configure make.conf** | Installs `cpuid2cpuflags` if missing, detects CPU flags, writes `CPU_FLAGS_X86`, `COMMON_FLAGS`, `MAKEOPTS` (via `nproc`), `EMERGE_DEFAULT_OPTS`, `PORTAGE_NICENESS`, and `FEATURES` into `/etc/portage/make.conf`. Existing keys are updated in-place; a timestamped backup is made first. |
+| 1 | **Configure make.conf** | Installs `cpuid2cpuflags` if missing, detects CPU flags, writes `CPU_FLAGS_X86`, `COMMON_FLAGS`, `MAKEOPTS` (via `nproc`, load-average as float), `EMERGE_DEFAULT_OPTS` (with `--autounmask-write --verbose --keep-going`), `PORTAGE_NICENESS`, `FEATURES` (with `candy`), `ACCEPT_LICENSE` (`"*"`), `GRUB_PLATFORMS` (auto-detected from UEFI/BIOS), `INPUT_DEVICES` (`libinput`), and `L10N` (`en`) into `/etc/portage/make.conf`. Existing keys are updated in-place; a timestamped backup is made first. |
 | 2 | **Generate /etc/fstab** | Scans mounted real block devices, resolves UUIDs via `blkid`, writes `/etc/fstab` with per-filesystem optimal mount options (e.g. `noatime,compress=zstd:1` for btrfs, `noatime,errors=remount-ro` for root ext4). Appends a `/tmp` tmpfs entry. |
 | 3 | **Full world rebuild & cleanup** | Runs: `emerge --sync` → `emaint sync --auto` → `emerge -uDN --with-bdeps=y @world` → `@preserved-rebuild` → `depclean` → `revdep-rebuild` → `perl-cleaner` (if present) → `dispatch-conf`. Pauses on each failure. |
 | 4 | **Bootloader info** | Detects UEFI vs BIOS, identifies installed bootloader (GRUB 2, systemd-boot, rEFInd, syslinux, LILO), lists relevant config files and directories, and shows `efibootmgr` entries when on EFI. |
